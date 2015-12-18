@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.coderwelsch.sketches" version="0.0.1" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+    <name>Sketches</name>
+    <description>
+        Prof. Alexandra Martini, Medium Light 2014 / 2015
+    </description>
+    <author email="social@coderwelsch.com" href="http://www.coderwelsch.com">
+        Coderwelsch - Coding & Design
+    </author>
+    <content src="index.html" />
+    <access origin="*" />
+</widget>

@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>SketchIt</title>
+
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
+
+		<!--<script src="files/js/require/require.js"></script>-->
+		<script src="cordova.js"></script>
+		<script src="files/js/evothings/evothings.js"></script>
+		<script src="files/js/evothings/easyble/easyble.js"></script>
+		<script src="files/js/jquery/jquery.js"></script>
+		<script src="files/js/jquery/colpick.js"></script>
+		<script src="files/js/powerange/powerange.min.js"></script>
+
+		<script type="text/javascript">
+			var app = {
+				SERVICE_UUID: '0000ffe0-0000-1000-8000-00805f9b34fb',
+				CHAR_RXTX_UUID: '0000ffe1-0000-1000-8000-00805f9b34fb',
+				DFRBLU_TX_UUID_DESCRIPTOR: '00002902-0000-1000-8000-00805f9b34fb',
+
+				matrixColumns: 8,
+				matrixRows: 30,
+				callbackFunctionsOnReceivedData: {},
+
+				currentColor: { r: 255, g: 0, b: 0 },
+				rainbowCurrentPos: 0,
+				matrixData: [],
+				matrixDataLength: 0,
+				pixelSPeed: 1000,
+				pixelSPeedSend: true,
+
+				initialize: function () {
+					app.ui.showPage( '#devices' );
+					app.ble.startScan();
+
+					app.callbackFunctionsOnReceivedData[ 'p_success' ] = app.ble.sendNextData;
+				},
+
+				ble: {
+					devices: {},
+					connectedDevice: {},
+
+					startScan: function () {
+						console.log( '[BLE] Start Scan' );
+
+						app.ble.devices = {};
+						app.ble.connectedDevice = {};
+
+						evothings.easyble.reportDeviceOnce( true );
+						evothings.easyble.startScan( app.ble.deviceFound, app.ble.errorHandler );
+					},
+
+					stopScan: function () {
+						console.log( '[BLE] Stop Scan' );
+
+						evothings.easyble.stopScan();
+					},
+
+					deviceFound: function ( device ) {
+						if ( device.name !== null ) {
+							console.log( '[BLE] Device Found With Name: ' + device.name );
+
+							app.ble.devices[ device.address ] = device;
+
+							app.ui.showListedDevices();
+						}
+					},
+
+					connectToDevice: function ( address ) {
+						app.ble.devices[ address ].connect( app.ble.deviceConnected, app.ble.errorHandler );
+					},
+
+					deviceConnected: function ( device ) {
+						app.ui.showPage( '#drawStage' );
+						app.ui.setHeaderLabel( 'Sketches' );
+
+						app.ui.initMatrix();
+						app.ui.initColorPicker();
+						app.ui.initSendBtn();
+						app.ui.initToolPalette();
+						app.ui.initSpeedSlider();
+
+						app.ble.connectedDevice = device;
+						app.ble.connectedDevice.readServices( [ app.SERVICE_UUID ], app.ble.serviceSuccess, app.ble.errorHandler );
+					},
+
+					serviceSuccess: function ( device ) {
+						device.enableNotification( app.CHAR_RXTX_UUID, app.ble.dataReceived, app.ble.errorHandler );
+					},
+
+					dataReceived: function ( data ) {
+						data = app.utils.ab2str( data );
+						console.log( '[BLE] Data Received: ' + data );
+
+						for ( var key in app.callbackFunctionsOnReceivedData ) {
+							if ( data.indexOf( key ) > -1 ) {
+								app.callbackFunctionsOnReceivedData[ key ]();
+							}
+						}
+					},
+
+					sendData: function ( data, success, error ) {
+						success = success || app.ble.dataSend;
+
+						if ( app.matrixData[ 0 ] != undefined ) {
+							console.log( '[BLE] Send Data: ' + app.matrixData[ app.matrixData.length > 0 ? app.matrixData.length - 1 : 0 ] );
+
+							app.ble.connectedDevice.writeCharacteristic( app.CHAR_RXTX_UUID, app.utils.str2ab( app.matrixData.pop() ), success, error || app.ble.errorHandler );
+						} else {
+							$( '#sendData .progress' ).css( 'width', '0px' );
+
+							console.log( '[BLE] No More Data To Send' );
+						}
+					},
+
+					sendDifferentData: function ( data, success, error ) {
+						success = success || app.ble.dataSend;
+
+						app.ble.connectedDevice.writeCharacteristic( app.CHAR_RXTX_UUID, app.utils.str2ab( data ), success, error || app.ble.errorHandler );
+					},
+
+					updatePixelSpeed: function ( speed ) {
+						speed = parseInt( speed );
+
+						if ( speed != app.pixelSPeed ) {
+							app.ble.sendDifferentData( 's=' + String(speed) + '' );
+						}
+
+						app.pixelSPeed = speed;
+					},
+
+					dataSend: function () {
+						console.log( '[BLE] Data Send Successfull' );
+					},
+
+					sendNextData: function () {
+						app.ble.sendData( app.matrixData );
+
+						$( '#sendData .progress' ).css( 'width', ( ( app.matrixDataLength - app.matrixData.length ) / app.matrixDataLength ) * 100 + '%' );
+					},
+
+					errorHandler: function ( error ) {
+						console.log( '[BLE] ' + error );
+					}
+				},
+
+				ui: {
+					showPage: function ( pageSelector ) {
+						$( '.body .page' ).css( 'display', 'none' );
+						$( pageSelector ).css( 'display', 'block' );
+					},
+
+					setHeaderLabel: function ( text ) {
+						$( '.header .label' ).html( text );
+					},
+
+					showListedDevices: function () {
+						$( '#devices > .deviceList' ).empty();
+
+						for ( var deviceAddress in app.ble.devices ) {
+							var device = app.ble.devices[ deviceAddress ];
+
+							$( '#devices > .deviceList' ).append( '<li data-address="' + device.address + '"><span>' + device.name + '</span><code>' + device.address +  '</code></li>' );
+							$( '#devices > .deviceList > li' ).on( 'touchstart', app.ui.deviceTouched );
+						}
+					},
+
+					initSendBtn: function () {
+						$( '#sendData' ).on( 'touchstart', app.ui.sendBtnTouched );
+					},
+
+					sendBtnTouched: function ( event ) {
+						app.utils.createMatrixData();
+
+						app.ble.sendData(  );
+
+						setTimeout( function () {
+							app.ble.sendData( app.matrixData, app.ble.sendNextData );
+						} );
+					},
+
+					deviceTouched: function ( event ) {
+						app.ble.connectToDevice( $( this ).attr( 'data-address' ) );
+					},
+
+					initMatrix: function () {
+						var $matrix = $( '#drawStage .matrix' );
+						$matrix.empty();
+
+						for ( var column = 0; column < app.matrixColumns; column++ ) {
+							for ( var row = 0; row < app.matrixRows; row++ ) {
+								var $field = $( '<div class="field" data-column="' + column + '" data-row="' + row +'"></div>' );
+								var width = ( $( '.matrix' ).width() / app.matrixColumns );
+								var height = ( $( '.matrix' ).height() / app.matrixRows );
+								
+								$field.css( {
+									width: width,
+									height: height,
+									top: row * height,
+									left: column * width
+								} );
+
+								$matrix.append( $field );
+							}
+						}
+
+						$matrix.on( 'touchmove', app.ui.matrixTouchMoved );
+					},
+
+					initSpeedSlider: function () {
+						app.powerange = new Powerange( $('.powerange')[ 0 ], {
+							min: 1,
+							max: 1000,
+							start: app.pixelSPeed,
+							callback: app.ui.sliderMoved
+						} );
+					},
+
+					sliderMoved: function () {
+						$( '.powerange-label' ).html( 'Speed (' + $('.powerange')[0].value + ')' );
+
+						if ( app.pixelSPeedSend == true ) {
+							app.pixelSPeedSend = false;
+
+							app.ble.updatePixelSpeed( $('.powerange')[0].value, function () {
+								app.pixelSPeedSend = true;
+							} );
+						}
+					},
+
+					initToolPalette: function () {
+						$( '.toolPalette' ).on( 'touchstart', function ( event ) {
+							$( this ).find( '.icon' ).removeClass( 'active' );
+							$( event.target ).addClass( 'active' );
+						} );
+					},
+
+					initColorPicker: function () {
+						$( '.colorPicker' ).colpick( {
+							flat: true,
+							layout:'rgb',
+							submit: 0,
+							onChange: function ( hrs, hex, rgb ) {
+								app.currentColor = rgb;
+							}
+						} );
+					},
+
+					matrixTouchMoved: function ( event ) {
+						event.preventDefault();
+
+						var $target = $( document.elementFromPoint( event.originalEvent.targetTouches[ 0 ].clientX, event.originalEvent.targetTouches[ 0 ].clientY ) );
+
+						if ( !$target.hasClass( 'field' ) ) {
+							return;
+						}
+
+						if ( $( '.toolPalette' ).find( '.active.brush' )[ 0 ] ) {
+							$target.addClass( 'active' );
+							$target.css( {
+								backgroundColor: 'rgb( ' + app.currentColor.r + ', ' + app.currentColor.g + ', ' + app.currentColor.b + ' )'
+							} );
+						} else if ( $( '.toolPalette' ).find( '.active.paintbrush' )[ 0 ] ) {
+							app.currentColor = app.utils.getRainbowColorAtPosition( app.rainbowCurrentPos );
+							app.rainbowCurrentPos = app.rainbowCurrentPos < 255 ? app.rainbowCurrentPos + 1 : 0;
+
+							$target.addClass( 'active' );
+							$target.css( {
+								backgroundColor: 'rgb( ' + parseInt(app.currentColor.r) + ', ' + parseInt(app.currentColor.g) + ', ' + parseInt(app.currentColor.b) + ' )'
+							} );
+						} else {
+							$target.removeClass( 'active' );
+							$target.css( {
+								backgroundColor: ''
+							} );
+						}
+
+						return false;
+					}
+				},
+
+				utils: {
+					createMatrixData: function () {
+						app.matrixData = [];
+
+						$( '.matrix .active' ).each( function ( index, value ) {
+							$value = $( value );
+
+							var rgbColor = app.utils.rgbToComponent( $value.css( 'background-color' ) );
+
+							app.matrixData.push( 'p=' + app.utils.intTo2DigitString( $value.attr( 'data-column' ) ) + "," + app.utils.intTo2DigitString( $value.attr( 'data-row' ) ) + "," +  app.utils.intTo3DigitString( rgbColor.r ) + "," + app.utils.intTo3DigitString( rgbColor.g ) + "," + app.utils.intTo3DigitString( rgbColor.b ) );
+						} );
+
+						app.matrixDataLength = app.matrixData.length;
+
+						app.matrixData.push( 'r=true' );
+
+						console.log( app.matrixData );
+					},
+
+					getRainbowColorAtPosition: function ( position, colors ) {
+						colors = colors || 50;
+
+						var frequency = 5 / colors;
+
+						return {
+							r: Math.sin ( frequency * position + 0 ) * (127) + 128,
+							g: Math.sin ( frequency * position + 1 ) * (127) + 128,
+							b: Math.sin ( frequency * position + 3 ) * (127) + 128
+						}
+					},
+
+					intTo3DigitString: function ( integer ) {
+						if ( integer < 10 ) {
+							return "00" + integer;
+						} else if ( integer < 100 ) {
+							return "0" + integer;
+						} else {
+							return "" + integer;
+						}
+					},
+
+					intTo2DigitString: function ( integer ) {
+						if ( integer < 10 ) {
+							return "0" + integer;
+						} else {
+							return "" + integer;
+						}
+					},
+
+					str2ab: function ( string ) {
+						var buf = new ArrayBuffer( string.length * 2 );
+						var bufView = new Uint8Array( buf );
+						
+						for (var i = 0, strLen = string.length; i < strLen; i++ ) {
+							bufView[ i ] = string.charCodeAt( i );
+						}
+
+						return bufView;
+					},
+
+					ab2str: function ( arrayBuffer ) {
+						return String.fromCharCode.apply( null, new Uint8Array( arrayBuffer ) );
+					},
+
+					rgbToComponent: function ( color ) {
+						var c = color.substring( 4, color.length - 1 ).replace( / /g, '' ).split( ',' );
+
+						return { r: c[0], g: c[1], b: c[2] };
+					}
+				}
+			};
+
+			document.addEventListener('deviceready', function() {
+				app.initialize();
+			}, false );
+		</script>
+
+		<style type="text/css">
+			@import "files/css/colpick.css";
+			@import "files/css/powerange.css";
+
+			* {
+				font-family: "Helvetica Neue";
+				font-weight: lighter;
+
+				margin: 0;
+				padding: 0;
+
+				-webkit-box-sizing: border-box;
+			}
+
+			html, body {
+				width: 100%;
+				height: 100%;
+
+				background: white;
+			}
+
+			.header {
+				width: 100%;
+				height: 80px;
+
+				background-color: #F25430;
+			}
+
+			.header .label {
+				width: 100%;
+				height: 80px;
+
+				line-height: 80px;
+				font-weight: 400;
+				text-align: center;
+				color: white;
+
+				display: inline-block;
+
+				vertical-align: middle;
+			}
+
+			.button {
+				width: 100%;
+
+				position: relative;
+
+				margin-bottom: 30px; 
+
+				background-color: #144C59;
+			}
+
+			.button .progress {
+				position: absolute;
+				top: 0;
+				left: 0;
+				bottom: 0;
+
+				width: 0px;
+
+				background-color: #30698C;
+
+				-webkit-transition: width 0.5s linear;
+			}
+
+			.button .label {
+				width: 100%;
+
+				position: relative;
+				z-index: 10;
+
+				display: inline-block;
+
+				padding: 20px;
+
+				vertical-align: middle;
+
+				color: white;
+				text-align: center;
+				font-weight: 400;
+				font-size: 20px;
+			}
+
+			.colorPicker {
+				margin-bottom: 20px;
+			}
+
+			.button:hover {
+				background-color: #30698C;
+			}
+
+			.body {
+				position: absolute;
+				top: 80px;
+				left: 0;
+				right: 0;
+			}
+
+			.body .page {
+				width: 100%;
+				height: 100%;
+
+				display: none;
+			}
+
+			.body #devices.page ul {
+				list-style: none;
+
+				padding: 10px;
+			}
+
+			.body #devices.page ul li {
+				width: 100%;
+
+				position: relative;
+
+				padding: 20px;
+				padding-right: 35px;
+
+				color: black;
+
+				background-color: #F2F2F2;
+			}
+
+			.body #devices.page ul li.empty:after {
+				display: none;
+			}
+
+			.body #devices.page ul li:hover {
+				color: white;
+
+				background-color: #30698C;
+			}
+
+			.body #devices.page ul li:after {
+				position: absolute;
+				top: 50%;
+				right: 5px;
+
+				content: "";
+
+				width: 32px;
+                height: 32px;
+
+				margin-top: -16px;
+                                    
+                background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAABFCAYAAAArQ+QdAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAKDAAACgwBmPVDSwAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAMiSURBVGiB5dq9i11FGMfxz9xdd3HXGMGXwsYgWJgqKgRck0KCGixUbCSIYCO+VBLQQmKCEK0UEaxE0UYRsRF1DSiKgokEFPQfEEGCEBJJDJHEmMdi5nCzyc3e1zOn8IFb3HvOnN+XM8/8ZuaZm7AHCxGxVwfRwxJeTCk91QWAiID38C8eigg1Pw3APFbxN7ZVBygQyziM49hcCyAVcZBSuh4HsYiViPi97RToXfglIo7iPizgi5TSNW0DDO4X7sBf+BaLVXJgAMS9OIuP0asOUCAew3m82QlAgXgegRc6ASgQbxSIx7sC6OEj/IP7qwMUiEV8g1PYWh2gQGzELziKW2YBsMYJR4mU0o04JE9eKxHxx5jWsyZ6w29ZGxFxBDvlt7GaUtowDcDkfccKTuNLXFElBwZAPIhzeJ/cnVUBCsSTske82glAgXipQOzuBKBAvC3PG7u6ApjDpziDHdUBCsSS7BEnsWWUNmMb0bBIKV2L72WfWImIX9e7f2wjGhYRcUw2qsCBlNJ1wxq08sEWnMAPWKqSAwMgdshJ+RnmqwMUiF3y8HynE4ACsbvkxP5OAArEawXi6a4AEj6Q1xEPVwcoEAv4St4Eb49owYiGRVnAfIebsL06QIG4DT/hUJdvYBO2dZ4D/59RoO8Dz6z5vZJ444QvX3KtgngzF7w78HrL4s1suKr2bKi/HjiM5cvd14oPpJQ2ydW2U7grcvFrYMx8SVbWhAfKs3euJ45WV8W3j9RmhuLNvuAs7hm53QwBmp3Ro2O1m5F4szd8buy2MxBvdsevT9R+SvGmPvCh2vUB/QrJ1/KRz2TPmVD8VhzDz7h6mrc4TZUs5M3nkbEecFHMjym+UXa5q2SLnUocE1VKT+POaUfPWDmgXys+hwdmJT4OQFMtf2KW4iMB6J8X7Ju1+FAA/ROTt9oQXxdA/8zoE8xVBdA/NTuIK9sSjxhgRCmlm4vwn2WsH596rK8Tlzs5XZJd7rc2xbnACVNKy/gcN8j7ttbFccnp+Rnc3WafD0xC+f8D5/FITfGm+1+RjebZ2uIRYQ5b8WNE7K/S5xfFfxtialvTjrgEAAAAAElFTkSuQmCCc2206ccbc2d31ba9b81cbcdaa84ddb53');
+                background-size: contain;
+                background-repeat: no-repeat;
+			}
+
+			.body #devices.page ul li span {
+				font-weight: 400;
+			}
+
+			.body #devices.page ul li code {
+				display: block;
+
+				padding-left: 10px;
+
+				font-size: 14px;
+
+				text-overflow: ellipsis;
+			}
+
+			.body #devices.page ul li code:before {
+				content: "Address:";
+
+				padding-right: 5px;
+
+				display: inline-block;
+			}
+
+			.body #drawStage.page {
+
+			}
+
+			.body #drawStage.page .matrix {
+				width: 100%;
+				height: 600px;
+
+				margin-bottom: 20px;
+
+				position: relative;
+			}
+
+			.body #drawStage.page .matrix .field {
+				border: 1px solid grey;
+
+				position: absolute;
+			}
+
+			.body #drawStage.page .panel h2 {
+				width: 100%;
+
+				margin-bottom: 20px;
+
+				font-weight: 400;
+
+				text-align: center;
+			}
+
+			.body #drawStage.page .panel .toolPalette {
+				width: 100%;
+			}
+
+			.body #drawStage.page .panel .toolPalette div {
+				width: 33.33%;
+				height: 50px;
+
+				margin-bottom: 20px;
+
+				float: left;
+			}
+
+			.body #drawStage.page .panel .toolPalette div:first-child {
+				border-right: 1px solid lightgrey;
+			}
+
+			.body #drawStage.page .panel .toolPalette div:last-child {
+				border-left: 1px solid lightgrey;
+			}
+
+			.icon {
+				background-size: contain;
+				background-repeat: no-repeat;
+				background-position: center center;
+			}
+
+			.icon.active {
+				background-color: lightblue;
+			}
+
+			.icon.brush {
+				background-image: url("files/svg/small23.svg");
+			}
+
+			.icon.paintbrush {
+				background-image: url("files/svg/iconmonstr-paintbrush-7-icon.svg");
+			}
+
+			.icon.erase {
+				background-image: url("files/svg/iconmonstr-x-mark-icon.svg");
+			}
+
+			.range-bar {
+				margin-bottom: 40px;
+			}
+
+			.speed-slider-wrapper {
+				padding: 0 40px;
+			}
+		</style>
+	</head>
+
+	<body>
+		<div class="header">
+			<h1 class="label">Devices</h1>
+		</div>
+
+		<div class="body">
+			<div class="page" id="devices">
+				<ul class="deviceList">
+					<li class="empty">No Devices found</li>
+				</ul>
+			</div>
+
+			<div class="page" id="drawStage">
+				<div class="matrix"></div>
+
+				<div class="panel">
+					<h2>Options</h2>
+
+					<div class="toolPalette">
+						<div class="icon brush active"></div>
+						<div class="icon paintbrush"></div>
+						<div class="icon erase"></div>
+					</div>
+
+					<div class="speed-slider-wrapper">
+						<div class="speed-slider">
+							<h2 class="powerange-label">Speed</h2>
+							<input class="powerange"/>
+						</div>
+					</div>
+
+					<div class="colorPicker"></div>
+					<div class="button" id="sendData">
+						<span class="label">Send Data</span>
+						<div class="progress"></div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</body>
+</html>
